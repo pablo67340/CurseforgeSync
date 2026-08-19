@@ -1,0 +1,2 @@
+// Every setting for this port lives in gradle.properties; the shared build logic is
+// in the root build.gradle. This file exists so the port is a real Gradle project.

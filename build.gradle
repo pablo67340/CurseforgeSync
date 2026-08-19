@@ -1,0 +1,164 @@
+plugins {
+    id 'base'
+}
+
+// The root project only aggregates. Everything buildable lives in ports/<mcVersion>.
+//
+// Unlike a normal Forge mod this project never touches a Minecraft class, so there is no
+// ForgeGradle here: each port compiles the same shared sources against the mod loading SPI
+// for its era (ModLauncher for 1.16.5+, FML's LaunchWrapper coremod API for 1.7.10/1.12.2).
+// That keeps a full eight-version build down to seconds and a few hundred KB of dependencies.
+
+// `ports` itself is just a folder that Gradle turns into an empty container project.
+def portProjects = subprojects.findAll { it.parent != null && it.parent.name == 'ports' }
+
+configure(portProjects) {
+    apply plugin: 'java'
+
+    group = mod_group_id
+    version = "${minecraft_version}-${mod_version}"
+
+    base {
+        archivesName = mod_id
+    }
+
+    java {
+        toolchain.languageVersion = JavaLanguageVersion.of(java_version as int)
+        withSourcesJar()
+    }
+
+    repositories {
+        mavenCentral()
+        maven {
+            name = 'MinecraftForge'
+            url = 'https://maven.minecraftforge.net/'
+            metadataSources {
+                mavenPom()
+                // Forge's 1.7.10-era artifacts predate any published POM, so fall back to
+                // resolving the jar directly when no metadata exists.
+                artifact()
+            }
+        }
+    }
+
+    // `platform` names the loader-specific source trees this port needs, in order. The core is
+    // identical everywhere; only the hook that Forge calls into differs by era.
+    def platformDirs = platform.split(',')*.trim().findAll { it }
+
+    sourceSets.main.java.srcDirs = [rootProject.file('common/src/main/java')] +
+            platformDirs.collect { rootProject.file("platform/${it}/src/main/java") } +
+            [file('src/main/java')]
+    sourceSets.main.resources.srcDirs = [rootProject.file('common/src/main/resources')] +
+            platformDirs.collect { rootProject.file("platform/${it}/src/main/resources") } +
+            [file('src/main/resources')]
+    sourceSets.test.java.srcDirs = [file('src/test/java')]
+
+    dependencies {
+        if (project.hasProperty('modlauncher_dependency')) {
+            compileOnly modlauncher_dependency
+            // ModLauncher's own interfaces mention these in method signatures, so javac has to be
+            // able to resolve them even though we never call into either.
+            compileOnly 'net.sf.jopt-simple:jopt-simple:5.0.4'
+            compileOnly 'org.jetbrains:annotations:24.1.0'
+        }
+        if (project.hasProperty('forge_universal')) {
+            // The universal jar carries FML's LaunchWrapper coremod API (IFMLLoadingPlugin).
+            // Artifact-only notation: these old builds have no usable Gradle metadata.
+            compileOnly "net.minecraftforge:forge:${forge_universal}:universal@jar"
+        }
+
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+
+    tasks.named('test', Test).configure {
+        useJUnitPlatform()
+        testLogging {
+            events 'failed'
+            exceptionFormat = 'full'
+        }
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        // The shared sources are written to Java 8 so the 1.7.10 port can compile them too.
+        options.compilerArgs << '-Xlint:-options'
+    }
+
+    tasks.named('processResources', ProcessResources).configure {
+        var replaceProperties = [
+                minecraft_version      : minecraft_version,
+                minecraft_version_range: minecraft_version_range,
+                forge_version          : forge_version,
+                forge_version_range    : forge_version_range,
+                loader_version_range   : loader_version_range,
+                mod_id                 : mod_id,
+                mod_name               : mod_name,
+                mod_license            : mod_license,
+                mod_version            : mod_version,
+                mod_authors            : mod_authors,
+                mod_description        : mod_description,
+                platform               : platform,
+                service_class          : project.findProperty('service_class') ?: '',
+        ]
+        inputs.properties replaceProperties
+
+        filesMatching([
+                'META-INF/mods.toml',
+                'mcmod.info',
+                'pack.mcmeta',
+                'META-INF/services/*',
+                'curseforgesync-build.properties',
+        ]) {
+            expand replaceProperties
+        }
+    }
+
+    tasks.named('jar', Jar).configure {
+        manifest {
+            def attrs = [
+                    'Specification-Title'     : mod_id,
+                    'Specification-Vendor'    : mod_authors,
+                    'Specification-Version'   : '1',
+                    'Implementation-Title'    : mod_name,
+                    'Implementation-Version'  : project.version,
+                    'Implementation-Vendor'   : mod_authors,
+                    'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                    // Pins the automatic module name so ModLauncher's service layer does not
+                    // derive one from the (version-suffixed) file name.
+                    'Automatic-Module-Name'   : mod_id,
+                    // Lets admins pre-seed a server with `java -jar curseforgesync-....jar`.
+                    'Main-Class'              : 'com.curseforgesync.core.Cli',
+            ]
+            if (project.hasProperty('coremod_class')) {
+                // FML 1.7.10/1.12.2 reads these to discover the coremod before mod scanning.
+                attrs['FMLCorePlugin'] = coremod_class
+                attrs['FMLCorePluginContainsFMLMod'] = 'false'
+                attrs['ForceLoadAsMod'] = 'false'
+            }
+            attributes(attrs)
+        }
+    }
+
+    tasks.register('collectJar', Copy) {
+        dependsOn tasks.named('jar')
+        from tasks.named('jar')
+        into rootProject.layout.buildDirectory.dir('libs')
+    }
+}
+
+// `gradlew release` puts every port's jar in build/libs at the repo root.
+tasks.register('release') {
+    group = 'build'
+    description = 'Builds every supported Minecraft version and collects the jars into build/libs.'
+    dependsOn portProjects.collect { it.tasks.named('collectJar') }
+}
+
+tasks.register('printVersions') {
+    group = 'help'
+    description = 'Lists the Minecraft/Forge version each port targets.'
+    def rows = portProjects.collect { p ->
+        "  ${p.name.padRight(8)}  forge ${p.forge_version.padRight(14)} jdk ${p.java_version.padRight(2)}  ${p.platform}"
+    }
+    doLast { println "CurseforgeSync ${mod_version}\n" + rows.join('\n') }
+}
