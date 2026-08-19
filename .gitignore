@@ -23,3 +23,6 @@ Thumbs.db
 # Runtime output from a local test server
 curseforgesync-cache/
 logs/
+
+# Scratch screenshots and log captures dropped in the repo root
+*.jpg
