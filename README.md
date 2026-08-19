@@ -109,6 +109,21 @@ packs or data packs off a server is far more likely to be a mistake than a fix.
 Delete the state file and tracked mode forgets everything, treating every existing jar as
 hand-placed.
 
+### Stale copies are removed either way
+
+Both modes also sweep the mods folder for older copies of the mods they just installed, found by
+reading mod IDs out of the jars themselves rather than by consulting the state file.
+
+This matters because the state file is bookkeeping, and bookkeeping can go missing — a first sync
+onto a server whose mods arrived some other way, a state file that was deleted, a run that ended
+before it could save. Installs are decided from the filesystem and happen regardless, so a lost
+state file would otherwise leave you with two versions of the same mod, which is fatal to a Forge
+server. Mod IDs live inside the jars and cannot drift out of step, so the duplicate gets caught
+however the records ended up wrong.
+
+If you deliberately run a different build of a mod that the pack also ships, list its file name in
+`protectedFiles`.
+
 ## Configuration
 
 `config/curseforgesync.json`. Written with comments on first run; only `modpackProjectId` is

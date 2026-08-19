@@ -425,6 +425,11 @@ public final class SyncEngine {
             for (Path path : plan.toRemove) {
                 CfsLog.info("  would remove  " + gameDir.relativize(path));
             }
+            if (!plan.toInstall.isEmpty()) {
+                CfsLog.info("Older copies of the mods above are also removed on a real run. They are "
+                        + "identified by reading mod IDs out of the downloaded jars, which a dry run "
+                        + "does not fetch, so they cannot be listed here.");
+            }
             CfsLog.info("dryRun is on, so nothing was changed.");
             return;
         }
@@ -447,6 +452,8 @@ public final class SyncEngine {
                 CfsLog.error("Could not install " + wanted.describe(), e);
             }
         }
+
+        sweepStaleDuplicates(plan);
 
         for (Path path : plan.toRemove) {
             boolean early = Jars.isEarlyLoader(path);
@@ -471,6 +478,83 @@ public final class SyncEngine {
 
         writeState(plan, state, packFile, manifest, result);
         writeManualDownloadList(result);
+    }
+
+    /**
+     * Deletes older copies of a mod the pack just updated, found by reading mod IDs out of the
+     * jars rather than by consulting the state file.
+     *
+     * <p>The state file is how removals are normally worked out, but it is bookkeeping and
+     * bookkeeping can go missing: a first sync onto a server whose mods were installed some other
+     * way, a state file that was deleted, an earlier run that ended before it could save. Installs
+     * are decided from the filesystem and so happen anyway, and the result is two versions of the
+     * same mod in the folder, which is fatal to a Forge server. Mod IDs live inside the jars and
+     * cannot drift, so this catches the duplicate no matter how the records ended up wrong.
+     */
+    private void sweepStaleDuplicates(Plan plan) {
+        Map<String, Path> wantedByModId = new LinkedHashMap<String, Path>();
+        Set<String> keep = new LinkedHashSet<String>();
+        for (Wanted wanted : plan.wanted.values()) {
+            if (wanted.kind != ContentKind.MOD || !Files.isRegularFile(wanted.destination())) {
+                continue;
+            }
+            keep.add(wanted.destination().toAbsolutePath().normalize().toString());
+            for (String modId : Jars.modIds(wanted.destination())) {
+                wantedByModId.put(modId, wanted.destination());
+            }
+        }
+        if (wantedByModId.isEmpty()) {
+            return;
+        }
+
+        Set<String> protectedNames = new LinkedHashSet<String>();
+        for (String name : config.protectedFiles) {
+            protectedNames.add(name.toLowerCase(Locale.ROOT));
+        }
+        if (selfJarName != null) {
+            protectedNames.add(selfJarName.toLowerCase(Locale.ROOT));
+        }
+        Set<String> alreadyQueued = new LinkedHashSet<String>();
+        for (Path path : plan.toRemove) {
+            alreadyQueued.add(path.toAbsolutePath().normalize().toString());
+        }
+
+        DirectoryStream<Path> listing = null;
+        try {
+            listing = Files.newDirectoryStream(modsDir);
+            for (Path candidate : listing) {
+                String absolute = candidate.toAbsolutePath().normalize().toString();
+                String name = candidate.getFileName().toString();
+                if (!Files.isRegularFile(candidate)
+                        || !name.toLowerCase(Locale.ROOT).endsWith(".jar")
+                        || keep.contains(absolute)
+                        || alreadyQueued.contains(absolute)
+                        || protectedNames.contains(name.toLowerCase(Locale.ROOT))) {
+                    continue;
+                }
+                for (String modId : Jars.modIds(candidate)) {
+                    Path replacement = wantedByModId.get(modId);
+                    if (replacement == null) {
+                        continue;
+                    }
+                    plan.toRemove.add(candidate);
+                    alreadyQueued.add(absolute);
+                    CfsLog.info("Removing a stale copy of '" + modId + "': " + name + " is superseded by "
+                            + replacement.getFileName() + ".");
+                    break;
+                }
+            }
+        } catch (IOException e) {
+            CfsLog.error("Could not scan the mods folder for stale duplicates", e);
+        } finally {
+            if (listing != null) {
+                try {
+                    listing.close();
+                } catch (IOException ignored) {
+                    // Nothing to do.
+                }
+            }
+        }
     }
 
     private List<Wanted> download(List<Wanted> pending, final Result result) {

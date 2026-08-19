@@ -12,9 +12,14 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.Enumeration;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.jar.Attributes;
 import java.util.jar.Manifest;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -69,6 +74,95 @@ public final class Jars {
             return false;
         } finally {
             closeQuietly(zip);
+        }
+    }
+
+    /**
+     * The mod IDs a jar declares, lowercased.
+     *
+     * <p>Two jars claiming the same mod ID always kill a Forge server, so this is what makes it
+     * possible to spot a stale copy of a mod without relying on the state file having survived.
+     * Returns empty for anything that is not a mod, which is the safe answer: an unreadable or
+     * unrecognised jar is never treated as a duplicate of something else.
+     */
+    public static Set<String> modIds(Path jar) {
+        Set<String> ids = new LinkedHashSet<String>();
+        ZipFile zip = null;
+        try {
+            zip = new ZipFile(jar.toFile());
+            ZipEntry toml = zip.getEntry("META-INF/mods.toml");
+            if (toml != null) {
+                ids.addAll(modIdsFromToml(readEntry(zip, toml)));
+            }
+            ZipEntry legacy = zip.getEntry("mcmod.info");
+            if (legacy != null) {
+                ids.addAll(modIdsFromMcmodInfo(readEntry(zip, legacy)));
+            }
+        } catch (IOException e) {
+            CfsLog.debug("Could not read mod IDs from " + jar.getFileName() + ": " + e);
+        } finally {
+            closeQuietly(zip);
+        }
+        return ids;
+    }
+
+    /** 1.16.5 and newer. */
+    static Set<String> modIdsFromToml(String text) {
+        Set<String> ids = new LinkedHashSet<String>();
+        boolean inModsBlock = false;
+        for (String rawLine : text.split("\r?\n")) {
+            String line = rawLine.trim();
+            if (line.isEmpty() || line.startsWith("#")) {
+                continue;
+            }
+            if (line.startsWith("[")) {
+                // Dependency blocks declare a modId too, so only [[mods]] entries count.
+                inModsBlock = line.replace(" ", "").startsWith("[[mods]]");
+                continue;
+            }
+            int equals = line.indexOf('=');
+            if (!inModsBlock || equals < 0 || !line.substring(0, equals).trim().equals("modId")) {
+                continue;
+            }
+            String value = unquote(line.substring(equals + 1).trim());
+            if (!value.isEmpty()) {
+                ids.add(value.toLowerCase(Locale.ROOT));
+            }
+        }
+        return ids;
+    }
+
+    /** 1.7.10 and 1.12.2. */
+    static Set<String> modIdsFromMcmodInfo(String text) {
+        Set<String> ids = new LinkedHashSet<String>();
+        Matcher matcher = MCMOD_INFO_ID.matcher(text);
+        while (matcher.find()) {
+            ids.add(matcher.group(1).toLowerCase(Locale.ROOT));
+        }
+        return ids;
+    }
+
+    private static final Pattern MCMOD_INFO_ID =
+            Pattern.compile("\"modid\"\\s*:\\s*\"([^\"]+)\"", Pattern.CASE_INSENSITIVE);
+
+    private static String unquote(String value) {
+        int open = value.indexOf('"');
+        if (open < 0) {
+            // Unquoted values are not legal TOML for a string, but be forgiving about a
+            // trailing comment rather than returning something with a '#' in it.
+            int comment = value.indexOf('#');
+            return (comment < 0 ? value : value.substring(0, comment)).trim();
+        }
+        int close = value.indexOf('"', open + 1);
+        return close < 0 ? "" : value.substring(open + 1, close);
+    }
+
+    private static String readEntry(ZipFile zip, ZipEntry entry) throws IOException {
+        InputStream in = zip.getInputStream(entry);
+        try {
+            return new String(readFully(in), UTF8);
+        } finally {
+            in.close();
         }
     }
 
