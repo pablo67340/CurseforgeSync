@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.0.2
+
+Scripts and configs from the pack are now reconciled, not just copied. Turn on `syncOverrides` to
+use this.
+
+Previously the pack's `overrides/` folder was extracted over the top of your game directory, which
+only ever added files. A CraftTweaker script the pack had since deleted stayed on your server
+forever, still changing recipes, with nothing to say where it came from.
+
+**What is new.**
+
+- A file the pack adds is written, a file it changes is updated, and **a file it deletes is removed
+  from your server too**
+- Directories left empty by a deletion are tidied up
+- `dryRun` now reports override changes as well, so you can see what would happen to your configs
+  before enabling anything
+
+**Your own edits are safe.** Every file written is recorded with the hash of what was written, so
+each file is one of three things on the next sync: untouched since CurseforgeSync wrote it, edited
+by you, or never managed here at all. Tracked mode only ever overwrites or deletes the first, and
+says so in the log when it leaves something alone. Strict mode treats the pack as authoritative and
+takes its copy regardless. If the pack drops a file you have edited, tracked mode keeps your version
+and stops managing it rather than warning you on every boot.
+
+`overrideFolders` still gates which top-level folders are eligible — `config`, `defaultconfigs`,
+`scripts` and `kubejs` by default — so a pack cannot write into `mods/` this way.
+
 ## 1.0.1
 
 Fixes a bug that could leave two versions of the same mod in `mods/` after a pack update, which

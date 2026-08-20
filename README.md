@@ -124,6 +124,42 @@ however the records ended up wrong.
 If you deliberately run a different build of a mod that the pack also ships, list its file name in
 `protectedFiles`.
 
+## Scripts and configs
+
+Packs ship more than mods. The `overrides/` folder inside a pack carries configs, CraftTweaker
+scripts and KubeJS, and those go out of date exactly like a mod does. Turn on `syncOverrides` and
+they are reconciled rather than merely copied:
+
+- A file the pack adds is written
+- A file the pack changes is updated
+- **A script the pack deletes is deleted from your server too**
+
+That last one is the reason this is reconciliation and not a copy. A CraftTweaker script that only
+ever gets added will sit there changing recipes long after the pack dropped it, with nothing to say
+where it came from.
+
+Every file written is recorded with the hash of what was written, which is what makes your own work
+safe. On the next sync a file is one of three things: untouched since CurseforgeSync wrote it, so
+it can be updated or removed freely; edited by you; or never managed here at all. Tracked mode
+never overwrites or deletes the last two, and says so in the log:
+
+```
+Leaving config/tuning.toml alone: the pack ships a different version, but this copy
+is not the one CurseforgeSync wrote. Delete it, or switch mode to strict, to take
+the pack's copy.
+```
+
+Strict mode treats the pack as authoritative and takes its copy regardless. If the pack drops a
+file you have edited, tracked mode keeps your version and stops managing it, so you are not warned
+about it on every boot.
+
+`overrideFolders` limits which top-level folders are eligible, and defaults to `config`,
+`defaultconfigs`, `scripts` and `kubejs`. Nothing outside that list is ever written, so a pack
+cannot drop a jar into `mods/` this way.
+
+Run with `dryRun` first if you have tuned your server by hand — it lists every override that would
+be added, updated or removed without touching anything.
+
 ## Configuration
 
 `config/curseforgesync.json`. Written with comments on first run; only `modpackProjectId` is
@@ -138,7 +174,7 @@ required.
 | `mode` | `"tracked"` | `tracked` or `strict`, as above. |
 | `side` | `"auto"` | `auto`, `server` or `client`. `auto` reads the launch target. |
 | `filterClientMods` | `true` | Skip mods that are only useful on the other side. |
-| `syncOverrides` | `false` | Also copy the pack's `overrides/` folder over local files. Off because it will overwrite server tuning you did by hand. |
+| `syncOverrides` | `false` | Also reconcile the pack's `overrides/` folder — configs, CraftTweaker scripts, KubeJS. See [Scripts and configs](#scripts-and-configs). |
 | `overrideFolders` | `["config", "defaultconfigs", "scripts", "kubejs"]` | Which override subfolders to copy when the above is on. |
 | `datapackFolder` | `""` | Where data packs go. Blank means `<level-name>/datapacks` on a server, `datapacks/` on a client. |
 | `dryRun` | `false` | Report what would change and touch nothing. |

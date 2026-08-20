@@ -8,6 +8,7 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -40,7 +41,7 @@ class SafetyTest {
     }
 
     @Test
-    void overrideExtractionHonoursTheFolderAllowList(@TempDir Path temp) throws IOException {
+    void overrideWalkHonoursTheFolderAllowList(@TempDir Path temp) throws IOException {
         Path zip = temp.resolve("pack.zip");
         writeZip(zip,
                 "overrides/config/jei.toml", "allowed",
@@ -48,15 +49,27 @@ class SafetyTest {
                 "overrides/scripts/a.zs", "allowed",
                 "overrides/../escape.txt", "blocked");
 
-        Path target = temp.resolve("server");
-        Files.createDirectories(target);
-        int written = Jars.extractFolder(zip, "overrides", target, List.of("config", "scripts"));
+        List<String> visited = new ArrayList<>();
+        Jars.forEachInFolder(zip, "overrides", List.of("config", "scripts"),
+                (relativePath, content) -> visited.add(relativePath));
 
-        assertEquals(2, written);
-        assertTrue(Files.exists(target.resolve("config/jei.toml")));
-        assertTrue(Files.exists(target.resolve("scripts/a.zs")));
-        assertFalse(Files.exists(target.resolve("mods/sneaky.jar")));
-        assertFalse(Files.exists(temp.resolve("escape.txt")));
+        assertEquals(List.of("config/jei.toml", "scripts/a.zs"), visited);
+    }
+
+    /**
+     * With no allow-list the traversal entry does get visited, so the guard at the point the path
+     * is resolved is the one that has to stop it.
+     */
+    @Test
+    void overrideWalkStillLeavesTraversalToTheResolveGuard(@TempDir Path temp) throws IOException {
+        Path zip = temp.resolve("pack.zip");
+        writeZip(zip, "overrides/../escape.txt", "blocked");
+
+        List<String> visited = new ArrayList<>();
+        Jars.forEachInFolder(zip, "overrides", List.of(), (relativePath, content) -> visited.add(relativePath));
+
+        assertEquals(List.of("../escape.txt"), visited);
+        assertNull(Jars.resolveSafely(temp.resolve("server"), visited.get(0)));
     }
 
     @Test

@@ -71,12 +71,39 @@ public final class SyncState {
         }
     }
 
+    /**
+     * One file copied out of the pack's overrides folder, and the hash of what was written.
+     *
+     * <p>The hash is what separates "the admin has since edited this" from "this is still exactly
+     * what we put down", which decides whether a file can be safely overwritten or deleted.
+     */
+    public static final class Override {
+        /** Relative to the game directory, with forward slashes. */
+        public String path = "";
+        public String sha1 = "";
+
+        Map<String, Object> toJson() {
+            Map<String, Object> json = new LinkedHashMap<String, Object>();
+            json.put("path", path);
+            json.put("sha1", sha1 == null ? "" : sha1);
+            return json;
+        }
+
+        static Override fromJson(Map<String, Object> json) {
+            Override entry = new Override();
+            entry.path = Json.str(json, "path", "");
+            entry.sha1 = Json.str(json, "sha1", "");
+            return entry;
+        }
+    }
+
     public int packProjectId;
     public int packFileId;
     public String packName = "";
     public String packVersion = "";
     public String syncedAt = "";
     public List<Entry> installed = new ArrayList<Entry>();
+    public List<Override> overrides = new ArrayList<Override>();
 
     public static Path pathIn(Path gameDir) {
         return gameDir.resolve("config").resolve("curseforgesync-state.json");
@@ -97,6 +124,9 @@ public final class SyncState {
             state.syncedAt = Json.str(json, "syncedAt", "");
             for (Object element : Json.arr(json, "installed")) {
                 state.installed.add(Entry.fromJson(Json.asObject(element)));
+            }
+            for (Object element : Json.arr(json, "overrides")) {
+                state.overrides.add(Override.fromJson(Json.asObject(element)));
             }
         } catch (Exception e) {
             // A corrupt state file must not brick the server. Starting from empty means tracked
@@ -123,6 +153,11 @@ public final class SyncState {
             entries.add(entry.toJson());
         }
         json.put("installed", entries);
+        List<Object> overrideEntries = new ArrayList<Object>();
+        for (Override entry : overrides) {
+            overrideEntries.add(entry.toJson());
+        }
+        json.put("overrides", overrideEntries);
 
         Path temporary = file.resolveSibling(file.getFileName() + ".tmp");
         Files.write(temporary, Json.write(json).getBytes(UTF8));

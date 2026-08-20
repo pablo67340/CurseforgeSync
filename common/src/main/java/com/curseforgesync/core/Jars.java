@@ -184,16 +184,24 @@ public final class Jars {
         }
     }
 
+    /** Receives one file from inside a zip folder, already read into memory. */
+    public interface EntryHandler {
+        void handle(String relativePath, byte[] content) throws IOException;
+    }
+
     /**
-     * Extracts everything under {@code prefix} into {@code target}.
+     * Hands every file under {@code prefix} to {@code handler}, newest-first order not guaranteed.
      *
-     * @param allowedRoots when non-empty, only these first-level folders inside the prefix are copied
-     * @return how many files were written
+     * <p>Content is passed in rather than written straight to disk so the caller can compare it
+     * against what is already there. Overrides have to be reconciled, not just dumped: the pack's
+     * copy of a file, the copy on disk and the copy an earlier sync wrote can all differ, and only
+     * the caller knows which should win.
+     *
+     * @param allowedRoots when non-empty, only these first-level folders inside the prefix are visited
      */
-    public static int extractFolder(Path zipPath, String prefix, Path target, List<String> allowedRoots)
-            throws IOException {
+    public static void forEachInFolder(Path zipPath, String prefix, List<String> allowedRoots,
+                                       EntryHandler handler) throws IOException {
         String normalizedPrefix = prefix.endsWith("/") ? prefix : prefix + "/";
-        int written = 0;
         ZipFile zip = new ZipFile(zipPath.toFile());
         try {
             Enumeration<? extends ZipEntry> entries = zip.entries();
@@ -213,30 +221,28 @@ public final class Jars {
                         continue;
                     }
                 }
-                Path destination = resolveSafely(target, relative);
-                if (destination == null) {
-                    CfsLog.warn("Refusing to extract " + entry.getName() + ": it escapes the game directory");
-                    continue;
-                }
-                Files.createDirectories(destination.getParent());
                 InputStream in = zip.getInputStream(entry);
-                OutputStream out = Files.newOutputStream(destination);
+                byte[] content;
                 try {
-                    byte[] buffer = new byte[16384];
-                    int read;
-                    while ((read = in.read(buffer)) >= 0) {
-                        out.write(buffer, 0, read);
-                    }
+                    content = readFully(in);
                 } finally {
-                    out.close();
                     in.close();
                 }
-                written++;
+                handler.handle(relative, content);
             }
         } finally {
             closeQuietly(zip);
         }
-        return written;
+    }
+
+    public static void write(Path destination, byte[] content) throws IOException {
+        Files.createDirectories(destination.getParent());
+        OutputStream out = Files.newOutputStream(destination);
+        try {
+            out.write(content);
+        } finally {
+            out.close();
+        }
     }
 
     /** Guards against zip entries like {@code ../../etc/passwd}. */
@@ -247,12 +253,7 @@ public final class Jars {
     }
 
     public static String sha1(Path file) throws IOException {
-        MessageDigest digest;
-        try {
-            digest = MessageDigest.getInstance("SHA-1");
-        } catch (NoSuchAlgorithmException e) {
-            throw new IOException("SHA-1 is unavailable on this JVM", e);
-        }
+        MessageDigest digest = sha1Digest();
         InputStream in = Files.newInputStream(file);
         try {
             byte[] buffer = new byte[65536];
@@ -263,11 +264,29 @@ public final class Jars {
         } finally {
             in.close();
         }
-        StringBuilder hex = new StringBuilder(40);
-        for (byte b : digest.digest()) {
-            hex.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        return hex(digest.digest());
+    }
+
+    public static String sha1(byte[] content) throws IOException {
+        MessageDigest digest = sha1Digest();
+        digest.update(content);
+        return hex(digest.digest());
+    }
+
+    private static MessageDigest sha1Digest() throws IOException {
+        try {
+            return MessageDigest.getInstance("SHA-1");
+        } catch (NoSuchAlgorithmException e) {
+            throw new IOException("SHA-1 is unavailable on this JVM", e);
         }
-        return hex.toString();
+    }
+
+    private static String hex(byte[] bytes) {
+        StringBuilder out = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            out.append(Character.forDigit((b >> 4) & 0xF, 16)).append(Character.forDigit(b & 0xF, 16));
+        }
+        return out.toString();
     }
 
     public static void copy(Path from, Path to) throws IOException {

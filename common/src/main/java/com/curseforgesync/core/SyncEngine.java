@@ -430,6 +430,9 @@ public final class SyncEngine {
                         + "identified by reading mod IDs out of the downloaded jars, which a dry run "
                         + "does not fetch, so they cannot be listed here.");
             }
+            if (config.syncOverrides) {
+                applyOverrides(packZip, manifest, state, true);
+            }
             CfsLog.info("dryRun is on, so nothing was changed.");
             return;
         }
@@ -473,7 +476,7 @@ public final class SyncEngine {
         }
 
         if (config.syncOverrides) {
-            applyOverrides(packZip, manifest);
+            applyOverrides(packZip, manifest, state, false);
         }
 
         writeState(plan, state, packFile, manifest, result);
@@ -675,12 +678,170 @@ public final class SyncEngine {
         return null;
     }
 
-    private void applyOverrides(Path packZip, PackManifest manifest) {
+    private static final class OverrideTally {
+        int written;
+        int updated;
+        int unchanged;
+        int keptLocal;
+        int removed;
+
+        boolean quiet() {
+            return written == 0 && updated == 0 && keptLocal == 0 && removed == 0;
+        }
+
+        String describe() {
+            return written + " added, " + updated + " updated, " + removed + " removed, "
+                    + unchanged + " unchanged, " + keptLocal + " left alone because you edited them";
+        }
+    }
+
+    /**
+     * Reconciles the pack's overrides folder against the game directory the same way mods are
+     * reconciled, rather than just copying files over the top.
+     *
+     * <p>Copying alone only ever adds. A CraftTweaker script the pack has since deleted would stay
+     * on the server forever, still changing recipes, and nothing would say why. So every file
+     * written here is recorded with the hash of what was written, which makes three cases
+     * distinguishable on the next run: the file is untouched and can be updated or deleted freely,
+     * the admin has edited it, or it was never ours to begin with. Tracked mode never overwrites or
+     * deletes the last two; strict mode treats the pack as authoritative and takes them.
+     */
+    void applyOverrides(Path packZip, PackManifest manifest, final SyncState state,
+                        final boolean reportOnly) {
+        final Map<String, String> previous = new LinkedHashMap<String, String>();
+        for (SyncState.Override entry : state.overrides) {
+            previous.put(entry.path, entry.sha1);
+        }
+        final Map<String, String> current = new LinkedHashMap<String, String>();
+        final OverrideTally tally = new OverrideTally();
+        final boolean packWins = config.mode == SyncConfig.Mode.STRICT;
+        final String verb = reportOnly ? "would be " : "";
+
         try {
-            int written = Jars.extractFolder(packZip, manifest.overridesFolder, gameDir, config.overrideFolders);
-            CfsLog.info("Copied " + written + " file(s) from the pack's " + manifest.overridesFolder + " folder.");
+            Jars.forEachInFolder(packZip, manifest.overridesFolder, config.overrideFolders,
+                    new Jars.EntryHandler() {
+                        @Override
+                        public void handle(String relativePath, byte[] content) throws IOException {
+                            Path destination = Jars.resolveSafely(gameDir, relativePath);
+                            if (destination == null) {
+                                CfsLog.warn("Refusing to write " + relativePath
+                                        + ": it escapes the game directory");
+                                return;
+                            }
+                            String key = relativePath.replace('\\', '/');
+                            String packHash = Jars.sha1(content);
+
+                            if (Files.isRegularFile(destination)) {
+                                String onDisk = Jars.sha1(destination);
+                                if (onDisk.equalsIgnoreCase(packHash)) {
+                                    tally.unchanged++;
+                                    current.put(key, packHash);
+                                    return;
+                                }
+                                String ourHash = previous.get(key);
+                                boolean untouchedSinceWeWroteIt = ourHash != null
+                                        && ourHash.equalsIgnoreCase(onDisk);
+                                if (!untouchedSinceWeWroteIt && !packWins) {
+                                    tally.keptLocal++;
+                                    CfsLog.warn("Leaving " + key + " alone: the pack ships a different "
+                                            + "version, but this copy is not the one CurseforgeSync "
+                                            + "wrote. Delete it, or switch mode to strict, to take the "
+                                            + "pack's copy.");
+                                    if (ourHash != null) {
+                                        current.put(key, ourHash);
+                                    }
+                                    return;
+                                }
+                                if (!reportOnly) {
+                                    Jars.write(destination, content);
+                                }
+                                tally.updated++;
+                                CfsLog.info("  ~ " + verb + "updated " + key);
+                            } else {
+                                if (!reportOnly) {
+                                    Jars.write(destination, content);
+                                }
+                                tally.written++;
+                                CfsLog.info("  + " + verb + "added " + key);
+                            }
+                            current.put(key, packHash);
+                        }
+                    });
+
+            for (Map.Entry<String, String> stale : previous.entrySet()) {
+                String key = stale.getKey();
+                if (current.containsKey(key)) {
+                    continue;
+                }
+                Path path = Jars.resolveSafely(gameDir, key);
+                if (path == null || !Files.isRegularFile(path)) {
+                    continue;
+                }
+                if (!packWins && !Jars.sha1(path).equalsIgnoreCase(stale.getValue())) {
+                    // The pack dropped it and the admin has since made it theirs. Keep the file,
+                    // but stop tracking it so this does not get re-reported on every boot.
+                    CfsLog.warn("The pack no longer ships " + key + ", but you have edited it, so it "
+                            + "is being left in place and will not be managed from now on.");
+                    continue;
+                }
+                if (!reportOnly) {
+                    Files.delete(path);
+                    pruneEmptyParents(path);
+                }
+                tally.removed++;
+                CfsLog.info("  - " + verb + "removed " + key);
+            }
+
+            if (!reportOnly) {
+                state.overrides.clear();
+                for (Map.Entry<String, String> entry : current.entrySet()) {
+                    SyncState.Override record = new SyncState.Override();
+                    record.path = entry.getKey();
+                    record.sha1 = entry.getValue();
+                    state.overrides.add(record);
+                }
+            }
+
+            String prefix = reportOnly ? "Overrides would be: " : "Overrides: ";
+            if (tally.quiet()) {
+                CfsLog.info(prefix + "already in sync (" + tally.unchanged + " file(s)).");
+            } else {
+                CfsLog.info(prefix + tally.describe() + ".");
+            }
         } catch (IOException e) {
-            CfsLog.error("Could not apply the pack's overrides", e);
+            CfsLog.error("Could not reconcile the pack's overrides", e);
+        }
+    }
+
+    /** Removes directories a deleted override has left empty, stopping at the game directory. */
+    private void pruneEmptyParents(Path deleted) {
+        Path root = gameDir.toAbsolutePath().normalize();
+        Path folder = deleted.getParent();
+        while (folder != null && !folder.toAbsolutePath().normalize().equals(root)
+                && folder.toAbsolutePath().normalize().startsWith(root)) {
+            DirectoryStream<Path> listing = null;
+            try {
+                listing = Files.newDirectoryStream(folder);
+                if (listing.iterator().hasNext()) {
+                    return;
+                }
+            } catch (IOException e) {
+                return;
+            } finally {
+                if (listing != null) {
+                    try {
+                        listing.close();
+                    } catch (IOException ignored) {
+                        // Nothing to do.
+                    }
+                }
+            }
+            try {
+                Files.delete(folder);
+            } catch (IOException e) {
+                return;
+            }
+            folder = folder.getParent();
         }
     }
 
