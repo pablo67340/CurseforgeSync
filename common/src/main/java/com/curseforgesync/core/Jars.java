@@ -33,13 +33,20 @@ public final class Jars {
      * <p>Forge's {@code ModDirTransformerDiscoverer} sweeps the mods folder for these before any
      * transformation service (including this one) is constructed. A jar carrying one that arrives
      * during our own sync has already missed its turn, so the server has to be restarted for it to
-     * take effect. This is exactly the mechanism CurseforgeSync itself uses to run early.
+     * take effect. This is exactly the mechanism CurseforgeSync itself uses to run early. NeoForge
+     * keeps the same sweep and adds its own locator and early-window services to the list.
      */
     private static final List<String> EARLY_LOADER_SERVICES = Arrays.asList(
             "META-INF/services/cpw.mods.modlauncher.api.ITransformationService",
+            "META-INF/services/cpw.mods.modlauncher.serviceapi.ILaunchPluginService",
+            "META-INF/services/cpw.mods.modlauncher.serviceapi.ITransformerDiscoveryService",
             "META-INF/services/net.minecraftforge.forgespi.locating.IModLocator",
             "META-INF/services/net.minecraftforge.forgespi.locating.IDependencyLocator",
-            "META-INF/services/cpw.mods.modlauncher.serviceapi.ITransformerDiscoveryService");
+            "META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator",
+            "META-INF/services/net.neoforged.neoforgespi.locating.IModFileReader",
+            "META-INF/services/net.neoforged.neoforgespi.locating.IDependencyLocator",
+            "META-INF/services/net.neoforged.neoforgespi.earlywindow.GraphicsBootstrapper",
+            "META-INF/services/net.neoforged.neoforgespi.earlywindow.ImmediateWindowProvider");
 
     private Jars() {
     }
@@ -80,23 +87,33 @@ public final class Jars {
     /**
      * The mod IDs a jar declares, lowercased.
      *
-     * <p>Two jars claiming the same mod ID always kill a Forge server, so this is what makes it
-     * possible to spot a stale copy of a mod without relying on the state file having survived.
-     * Returns empty for anything that is not a mod, which is the safe answer: an unreadable or
-     * unrecognised jar is never treated as a duplicate of something else.
+     * <p>Two jars claiming the same mod ID always kill the server, on every loader, so this is what
+     * makes it possible to spot a stale copy of a mod without relying on the state file having
+     * survived. Returns empty for anything that is not a mod, which is the safe answer: an
+     * unreadable or unrecognised jar is never treated as a duplicate of something else.
      */
     public static Set<String> modIds(Path jar) {
         Set<String> ids = new LinkedHashSet<String>();
         ZipFile zip = null;
         try {
             zip = new ZipFile(jar.toFile());
-            ZipEntry toml = zip.getEntry("META-INF/mods.toml");
-            if (toml != null) {
-                ids.addAll(modIdsFromToml(readEntry(zip, toml)));
+            for (String tomlName : new String[] {"META-INF/mods.toml", "META-INF/neoforge.mods.toml"}) {
+                ZipEntry toml = zip.getEntry(tomlName);
+                if (toml != null) {
+                    ids.addAll(modIdsFromToml(readEntry(zip, toml)));
+                }
             }
             ZipEntry legacy = zip.getEntry("mcmod.info");
             if (legacy != null) {
                 ids.addAll(modIdsFromMcmodInfo(readEntry(zip, legacy)));
+            }
+            ZipEntry fabric = zip.getEntry("fabric.mod.json");
+            if (fabric != null) {
+                ids.addAll(modIdsFromFabricJson(readEntry(zip, fabric)));
+            }
+            ZipEntry quilt = zip.getEntry("quilt.mod.json");
+            if (quilt != null) {
+                ids.addAll(modIdsFromQuiltJson(readEntry(zip, quilt)));
             }
         } catch (IOException e) {
             CfsLog.debug("Could not read mod IDs from " + jar.getFileName() + ": " + e);
@@ -140,6 +157,34 @@ public final class Jars {
             ids.add(matcher.group(1).toLowerCase(Locale.ROOT));
         }
         return ids;
+    }
+
+    /** Fabric: a single top-level {@code id}. */
+    static Set<String> modIdsFromFabricJson(String text) {
+        Set<String> ids = new LinkedHashSet<String>();
+        try {
+            addId(ids, Json.str(Json.parseObject(text), "id", ""));
+        } catch (RuntimeException e) {
+            CfsLog.debug("Unreadable fabric.mod.json: " + e);
+        }
+        return ids;
+    }
+
+    /** Quilt: {@code quilt_loader.id}. */
+    static Set<String> modIdsFromQuiltJson(String text) {
+        Set<String> ids = new LinkedHashSet<String>();
+        try {
+            addId(ids, Json.str(Json.obj(Json.parseObject(text), "quilt_loader"), "id", ""));
+        } catch (RuntimeException e) {
+            CfsLog.debug("Unreadable quilt.mod.json: " + e);
+        }
+        return ids;
+    }
+
+    private static void addId(Set<String> ids, String id) {
+        if (id != null && !id.trim().isEmpty()) {
+            ids.add(id.trim().toLowerCase(Locale.ROOT));
+        }
     }
 
     private static final Pattern MCMOD_INFO_ID =

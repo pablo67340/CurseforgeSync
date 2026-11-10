@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
-"""Upload every CurseforgeSync jar (all 8 ports) to CurseForge as project
-files, with the right game version, modloader, Java version and environment
-tags, plus the changelog.
+"""Upload every CurseforgeSync jar to CurseForge as project files, with the
+right game version, modloader, Java version and environment tags, plus the
+changelog.
+
+Four files go up per release:
+  universal  one jar for Forge 1.19.2+, NeoForge, Fabric and Quilt, tagged with
+             every Minecraft release CurseForge lists from 1.19.2 upward, so a
+             new Minecraft version is covered without building anything
+  1.16.5     ModLauncher 8
+  1.12.2     LaunchWrapper coremod
+  1.7.10     LaunchWrapper coremod
 
 Prerequisites:
   1. pip install -r requirements.txt          (just `requests`)
@@ -15,7 +23,7 @@ Prerequisites:
 Usage, from the project root:
   python scripts/upload_curseforge.py --project-id 123456
   python scripts/upload_curseforge.py --dry-run          # resolve + preview only
-  python scripts/upload_curseforge.py --only 1.19.2,1.20.6
+  python scripts/upload_curseforge.py --only universal,1.12.2
 """
 
 import argparse
@@ -33,26 +41,27 @@ UPLOAD_API = "https://minecraft.curseforge.com/api"
 MOD_NAME = "CurseforgeSync"
 JAR_PREFIX = "curseforgesync"
 
-# Every shipped version: Minecraft version tag on CurseForge + the Java that
-# version of the game runs on. Note this is the runtime Java, not the level the
-# jar is compiled to -- the shared sources are Java 8 so the oldest port can
-# build, and Java 8 bytecode loads happily on every later runtime.
-PORTS = [
-    {"mc": "1.7.10",  "java": "Java 8"},
-    {"mc": "1.12.2",  "java": "Java 8"},
-    {"mc": "1.16.5",  "java": "Java 8"},
-    {"mc": "1.19.2",  "java": "Java 17"},
-    {"mc": "1.20.6",  "java": "Java 21"},
-    {"mc": "1.21.11", "java": "Java 21"},
-    {"mc": "26.1.2",  "java": "Java 25"},
-    {"mc": "26.2",    "java": "Java 25"},
+# The universal jar never touches a Minecraft class and detects the version at
+# launch, so it is tagged with every release from the oldest one its loaders
+# support. Forge 1.19.2 (ModLauncher 10) is that floor.
+UNIVERSAL_MIN_MC = (1, 19, 2)
+UNIVERSAL_LOADERS = ["Forge", "NeoForge", "Fabric", "Quilt"]
+UNIVERSAL_JAVA = ["Java 17", "Java 21", "Java 25"]
+
+# One jar per legacy Minecraft version, plus the Java that version of the game
+# runs on. This is the runtime Java, not the level the jar is compiled to.
+LEGACY_PORTS = [
+    {"mc": "1.7.10", "java": "Java 8"},
+    {"mc": "1.12.2", "java": "Java 8"},
+    {"mc": "1.16.5", "java": "Java 8"},
 ]
 
 # Server only. The mod does run on a client, but syncing a mods folder against a
 # pack is a server job, and tagging it Client would put it in front of people
 # looking for something to install alongside a pack rather than to serve one.
-COMMON_TAGS = [("modloader", "Forge"),
-               ("environment", "Server")]
+ENVIRONMENT_TAG = ("environment", "Server")
+
+RELEASE_VERSION = re.compile(r"\d+(\.\d+)+")
 
 
 def read_mod_version() -> str:
@@ -95,7 +104,7 @@ def fetch_version_ids(token: str) -> dict:
         name = vt["name"]
         # Minecraft version types are usually "Minecraft 1.19", but some are
         # bare version numbers like "26.2"
-        if name.startswith("Minecraft") or re.fullmatch(r"\d+(\.\d+)*", name):
+        if name.startswith("Minecraft") or RELEASE_VERSION.fullmatch(name):
             type_category[vt["id"]] = "minecraft"
         elif name == "Java":
             type_category[vt["id"]] = "java"
@@ -114,6 +123,22 @@ def fetch_version_ids(token: str) -> dict:
     return ids
 
 
+def version_tuple(name: str) -> tuple:
+    return tuple(int(part) for part in name.split("."))
+
+
+def minecraft_releases_from(floor: tuple, version_ids: dict) -> list:
+    """Every Minecraft release CurseForge knows of at or above `floor`.
+
+    Snapshots and other non-numeric names are skipped, so this only ever
+    tags versions a server can actually run.
+    """
+    releases = [name for category, name in version_ids
+                if category == "minecraft" and RELEASE_VERSION.fullmatch(name)
+                and version_tuple(name) >= floor]
+    return sorted(set(releases), key=version_tuple)
+
+
 def resolve_tags(tags: list, version_ids: dict) -> list:
     """tags is a list of (category, name) pairs."""
     resolved = []
@@ -126,6 +151,28 @@ def resolve_tags(tags: list, version_ids: dict) -> list:
                      f"Closest available names in that category: {close}")
         resolved.append(version_ids[key])
     return resolved
+
+
+def build_uploads(mod_version: str, jar_dir: Path, version_ids: dict) -> list:
+    universal_mc = minecraft_releases_from(UNIVERSAL_MIN_MC, version_ids)
+    uploads = [{
+        "key": "universal",
+        "jar": jar_dir / f"{JAR_PREFIX}-{mod_version}.jar",
+        "display": f"{MOD_NAME} {mod_version} (Forge, NeoForge, Fabric, Quilt)",
+        "tags": ([("minecraft", mc) for mc in universal_mc]
+                 + [("modloader", loader) for loader in UNIVERSAL_LOADERS]
+                 + [("java", java) for java in UNIVERSAL_JAVA]
+                 + [ENVIRONMENT_TAG]),
+    }]
+    for port in LEGACY_PORTS:
+        uploads.append({
+            "key": port["mc"],
+            "jar": jar_dir / f"{JAR_PREFIX}-{port['mc']}-{mod_version}.jar",
+            "display": f"{MOD_NAME} {mod_version} (MC {port['mc']})",
+            "tags": [("minecraft", port["mc"]), ("java", port["java"]),
+                     ("modloader", "Forge"), ENVIRONMENT_TAG],
+        })
+    return uploads
 
 
 def main() -> None:
@@ -142,7 +189,7 @@ def main() -> None:
     parser.add_argument("--release-type", default="release",
                         choices=["release", "beta", "alpha"])
     parser.add_argument("--only", default=None,
-                        help="comma-separated MC versions to upload (default: all)")
+                        help="comma-separated uploads: universal and/or legacy MC versions (default: all)")
     parser.add_argument("--dry-run", action="store_true",
                         help="resolve everything and show what would be uploaded")
     args = parser.parse_args()
@@ -155,48 +202,46 @@ def main() -> None:
     mod_version = args.mod_version or read_mod_version()
     changelog = read_changelog(Path(args.changelog_file), mod_version)
     only = set(args.only.split(",")) if args.only else None
-
     jar_dir = Path(args.jar_dir) if args.jar_dir else PROJECT_ROOT / "build" / "libs"
-    ports = [p for p in PORTS if only is None or p["mc"] in only]
 
-    # Verify all jars exist before touching the network
-    for port in ports:
-        port["jar"] = jar_dir / f"{JAR_PREFIX}-{port['mc']}-{mod_version}.jar"
-        if not port["jar"].is_file():
-            sys.exit(f"Missing jar: {port['jar']}\n"
-                     f"Run `gradlew release` to build and collect all 8 ports first.")
-
-    print(f"Resolving CurseForge game version IDs...")
+    print("Resolving CurseForge game version IDs...")
     version_ids = fetch_version_ids(args.token)
+    uploads = [u for u in build_uploads(mod_version, jar_dir, version_ids)
+               if only is None or u["key"] in only]
+
+    # Verify all jars exist before uploading anything
+    for upload in uploads:
+        if not upload["jar"].is_file():
+            sys.exit(f"Missing jar: {upload['jar']}\n"
+                     f"Run `gradlew release` to build and collect every jar first.")
 
     uploaded = []
-    for port in ports:
-        tags = [("minecraft", port["mc"]), ("java", port["java"])] + COMMON_TAGS
-        game_versions = resolve_tags(tags, version_ids)
+    for upload in uploads:
+        game_versions = resolve_tags(upload["tags"], version_ids)
         metadata = {
             "changelog": changelog,
             "changelogType": "markdown",
-            "displayName": f"{MOD_NAME} {mod_version} (MC {port['mc']})",
+            "displayName": upload["display"],
             "gameVersions": game_versions,
             "releaseType": args.release_type,
         }
-        print(f"\n{port['jar'].name}")
-        print(f"  tags: {', '.join(n for _, n in tags)}  ->  ids {game_versions}")
+        print(f"\n{upload['jar'].name}")
+        print(f"  tags: {', '.join(n for _, n in upload['tags'])}")
         if args.dry_run:
             continue
 
-        with open(port["jar"], "rb") as fh:
+        with open(upload["jar"], "rb") as fh:
             resp = requests.post(
                 f"{UPLOAD_API}/projects/{args.project_id}/upload-file",
                 headers={"X-Api-Token": args.token},
                 data={"metadata": json.dumps(metadata)},
-                files={"file": (port["jar"].name, fh, "application/java-archive")},
+                files={"file": (upload["jar"].name, fh, "application/java-archive")},
                 timeout=300,
             )
         if resp.status_code != 200:
             sys.exit(f"  UPLOAD FAILED ({resp.status_code}): {resp.text}")
         file_id = resp.json()["id"]
-        uploaded.append((port["mc"], file_id))
+        uploaded.append((upload["key"], file_id))
         print(f"  uploaded -> file id {file_id}")
 
     if args.dry_run:

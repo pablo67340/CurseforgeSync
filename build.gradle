@@ -4,10 +4,12 @@ plugins {
 
 // The root project only aggregates. Everything buildable lives in ports/<mcVersion>.
 //
-// Unlike a normal Forge mod this project never touches a Minecraft class, so there is no
-// ForgeGradle here: each port compiles the same shared sources against the mod loading SPI
-// for its era (ModLauncher for 1.16.5+, FML's LaunchWrapper coremod API for 1.7.10/1.12.2).
-// That keeps a full eight-version build down to seconds and a few hundred KB of dependencies.
+// Unlike a normal mod this project never touches a Minecraft class, so there is no ForgeGradle,
+// Loom or ModDevGradle here: each port compiles the same shared sources against the mod loading
+// SPI for its era. `ports/universal` is one jar for every modern loader (ModLauncher for Forge
+// and NeoForge, a preLaunch entrypoint for Fabric and Quilt); the 1.7.10, 1.12.2 and 1.16.5
+// ports exist only because LaunchWrapper and ModLauncher 8 expose different interfaces.
+// That keeps a full build down to seconds and a few hundred KB of dependencies.
 
 // `ports` itself is just a folder that Gradle turns into an empty container project.
 def portProjects = subprojects.findAll { it.parent != null && it.parent.name == 'ports' }
@@ -16,7 +18,8 @@ configure(portProjects) {
     apply plugin: 'java'
 
     group = mod_group_id
-    version = "${minecraft_version}-${mod_version}"
+    // The universal port leaves minecraft_version blank, which also keeps it out of the jar name.
+    version = minecraft_version ? "${minecraft_version}-${mod_version}" : mod_version
 
     base {
         archivesName = mod_id
@@ -39,6 +42,11 @@ configure(portProjects) {
                 artifact()
             }
         }
+        maven {
+            name = 'Fabric'
+            url = 'https://maven.fabricmc.net/'
+            content { includeGroup 'net.fabricmc' }
+        }
     }
 
     // `platform` names the loader-specific source trees this port needs, in order. The core is
@@ -60,6 +68,11 @@ configure(portProjects) {
             // able to resolve them even though we never call into either.
             compileOnly 'net.sf.jopt-simple:jopt-simple:5.0.4'
             compileOnly 'org.jetbrains:annotations:24.1.0'
+        }
+        if (project.hasProperty('fabric_loader_dependency')) {
+            // Only FabricLoader, EnvType and PreLaunchEntrypoint are used; none of the loader's
+            // own dependencies appear in those signatures.
+            compileOnly(fabric_loader_dependency) { transitive = false }
         }
         if (project.hasProperty('forge_universal')) {
             // The universal jar carries FML's LaunchWrapper coremod API (IFMLLoadingPlugin).
@@ -105,6 +118,8 @@ configure(portProjects) {
 
         filesMatching([
                 'META-INF/mods.toml',
+                'META-INF/neoforge.mods.toml',
+                'fabric.mod.json',
                 'mcmod.info',
                 'pack.mcmeta',
                 'META-INF/services/*',
@@ -150,15 +165,16 @@ configure(portProjects) {
 // `gradlew release` puts every port's jar in build/libs at the repo root.
 tasks.register('release') {
     group = 'build'
-    description = 'Builds every supported Minecraft version and collects the jars into build/libs.'
+    description = 'Builds every port and collects the jars into build/libs.'
     dependsOn portProjects.collect { it.tasks.named('collectJar') }
 }
 
 tasks.register('printVersions') {
     group = 'help'
-    description = 'Lists the Minecraft/Forge version each port targets.'
+    description = 'Lists what each port targets.'
     def rows = portProjects.collect { p ->
-        "  ${p.name.padRight(8)}  forge ${p.forge_version.padRight(14)} jdk ${p.java_version.padRight(2)}  ${p.platform}"
+        def forge = p.forge_version ?: 'detected at runtime'
+        "  ${p.name.padRight(9)}  forge ${forge.padRight(19)} jdk ${p.java_version.padRight(2)}  ${p.platform}"
     }
     doLast { println "CurseforgeSync ${mod_version}\n" + rows.join('\n') }
 }

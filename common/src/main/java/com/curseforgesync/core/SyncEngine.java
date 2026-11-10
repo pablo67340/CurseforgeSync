@@ -31,7 +31,7 @@ public final class SyncEngine {
     private final Path modsDir;
     private final Path cacheDir;
     private final SyncConfig config;
-    private final BuildInfo build;
+    private final GameInfo game;
     private final Side runningSide;
     private final String selfJarName;
 
@@ -54,12 +54,12 @@ public final class SyncEngine {
         }
     }
 
-    public SyncEngine(Path gameDir, SyncConfig config, BuildInfo build, Side runningSide, String selfJarName) {
+    public SyncEngine(Path gameDir, SyncConfig config, GameInfo game, Side runningSide, String selfJarName) {
         this.gameDir = gameDir;
         this.modsDir = gameDir.resolve("mods");
         this.cacheDir = gameDir.resolve("curseforgesync-cache");
         this.config = config;
-        this.build = build;
+        this.game = game;
         this.runningSide = runningSide;
         this.selfJarName = selfJarName;
         this.http = new Http(config.connectTimeoutSeconds, config.readTimeoutSeconds, config.maxAttempts);
@@ -106,13 +106,20 @@ public final class SyncEngine {
         CurseForgeApi.Project project = api.project(config.modpackProjectId);
         CfsLog.info("Following " + project.name + " (project " + project.id + ")");
 
-        List<CurseForgeApi.File> candidates = api.projectFiles(config.modpackProjectId, build.minecraftVersion);
-        if (candidates.isEmpty()) {
-            // Some packs tag uploads with a different game version string than the server reports,
-            // so retry without the filter before giving up.
-            CfsLog.warn("No uploads tagged for Minecraft " + build.minecraftVersion
-                    + "; falling back to the project's newest upload of any version.");
+        List<CurseForgeApi.File> candidates;
+        if (game.minecraftVersion.isEmpty()) {
+            CfsLog.warn("The Minecraft version could not be detected, so the newest upload of any version "
+                    + "is used. Set minecraftVersion in " + SyncConfig.pathIn(gameDir) + " to be sure.");
             candidates = api.projectFiles(config.modpackProjectId, null);
+        } else {
+            candidates = api.projectFiles(config.modpackProjectId, game.minecraftVersion);
+            if (candidates.isEmpty()) {
+                // Some packs tag uploads with a different game version string than the server
+                // reports, so retry without the filter before giving up.
+                CfsLog.warn("No uploads tagged for Minecraft " + game.minecraftVersion
+                        + "; falling back to the project's newest upload of any version.");
+                candidates = api.projectFiles(config.modpackProjectId, null);
+            }
         }
 
         CurseForgeApi.File best = null;
@@ -126,8 +133,9 @@ public final class SyncEngine {
         }
         if (best == null) {
             throw new IOException("Project " + config.modpackProjectId + " has no "
-                    + channelName(config.releaseChannel) + "-or-better upload for Minecraft "
-                    + build.minecraftVersion + ". Loosen releaseChannel or pin modpackFileId.");
+                    + channelName(config.releaseChannel) + "-or-better upload"
+                    + (game.minecraftVersion.isEmpty() ? "" : " for Minecraft " + game.minecraftVersion)
+                    + ". Loosen releaseChannel or pin modpackFileId.");
         }
         return best;
     }
@@ -154,21 +162,46 @@ public final class SyncEngine {
         return target;
     }
 
+    /** A pack that must not be installed here. Expected, so it is reported without a stack trace. */
+    public static final class PackMismatchException extends IOException {
+        PackMismatchException(String message) {
+            super(message);
+        }
+    }
+
     /**
-     * Refuses to sync a pack built for a different Minecraft version.
+     * Refuses to sync a pack built for a different Minecraft version or a different loader.
      *
      * <p>Nothing else in the pipeline would notice: the mods would download happily and then the
      * server would die in mod loading with an error that points nowhere near the real cause.
      */
     private void verifyPackTargetsThisServer(PackManifest manifest) throws IOException {
-        if (build.minecraftVersion.isEmpty() || manifest.minecraftVersion.isEmpty()
-                || manifest.minecraftVersion.equals(build.minecraftVersion)) {
-            return;
+        if (!game.minecraftVersion.isEmpty() && !manifest.minecraftVersion.isEmpty()
+                && !manifest.minecraftVersion.equals(game.minecraftVersion)) {
+            throw new PackMismatchException("This pack targets Minecraft " + manifest.minecraftVersion
+                    + " but the server is running " + game.minecraftVersion + ". Refusing to sync. "
+                    + "Update the server to " + manifest.minecraftVersion
+                    + ", or pin modpackFileId to an upload that matches this server.");
         }
-        throw new IOException("This pack targets Minecraft " + manifest.minecraftVersion
-                + " but the server is running " + build.minecraftVersion + ". Refusing to sync. "
-                + "Install the CurseforgeSync build for " + manifest.minecraftVersion
-                + ", or pin modpackFileId to an upload that matches this server.");
+        GameInfo.Loader packLoader = GameInfo.Loader.fromManifestId(manifest.modLoaderId);
+        if (!game.loader.canRunPackFor(packLoader, game.minecraftVersion)) {
+            throw new PackMismatchException("This pack is built for " + packLoader.displayName + " (" + manifest.modLoaderId
+                    + ") but the server is running " + game.loader.displayName + ". Refusing to sync, "
+                    + "because none of its mods would load. Install " + packLoader.displayName
+                    + " on this server instead.");
+        }
+        String packLoaderVersion = afterFirstDash(manifest.modLoaderId);
+        if (packLoader == game.loader && !packLoaderVersion.isEmpty() && !game.loaderVersion.isEmpty()
+                && !packLoaderVersion.equals(game.loaderVersion)) {
+            CfsLog.warn("The pack was built with " + packLoader.displayName + " " + packLoaderVersion
+                    + " and this server runs " + game.loaderVersion + ". If mods fail to load, install "
+                    + packLoader.displayName + " " + packLoaderVersion + ".");
+        }
+    }
+
+    private static String afterFirstDash(String value) {
+        int dash = value == null ? -1 : value.indexOf('-');
+        return dash < 0 ? "" : value.substring(dash + 1).trim();
     }
 
     // ------------------------------------------------------------ planning
@@ -444,7 +477,7 @@ public final class SyncEngine {
                 Jars.copy(cachePathFor(wanted), wanted.destination());
                 result.installed.add(wanted.describe());
                 CfsLog.info("  + " + wanted.describe());
-                if (wanted.kind == ContentKind.MOD && !result.restartRequired
+                if (wanted.kind == ContentKind.MOD && !result.restartRequired && !game.modsAlreadyDiscovered
                         && Jars.isEarlyLoader(wanted.destination())) {
                     result.restartRequired = true;
                     result.restartReason = wanted.fileName + " is a coremod or loader plugin, and those "
@@ -459,7 +492,7 @@ public final class SyncEngine {
         sweepStaleDuplicates(plan);
 
         for (Path path : plan.toRemove) {
-            boolean early = Jars.isEarlyLoader(path);
+            boolean early = !game.modsAlreadyDiscovered && Jars.isEarlyLoader(path);
             try {
                 Files.delete(path);
                 result.removed.add(gameDir.relativize(path).toString());
@@ -475,12 +508,33 @@ public final class SyncEngine {
             }
         }
 
+        if (game.modsAlreadyDiscovered && !result.restartRequired && modsFolderChanged(downloaded, plan)) {
+            result.restartRequired = true;
+            result.restartReason = game.loader.displayName + " picks its mods before any mod code runs, so the "
+                    + "changes to mods/ only take effect on the next start";
+        }
+
         if (config.syncOverrides) {
             applyOverrides(packZip, manifest, state, false);
         }
 
         writeState(plan, state, packFile, manifest, result);
         writeManualDownloadList(result);
+    }
+
+    private boolean modsFolderChanged(List<Wanted> downloaded, Plan plan) {
+        for (Wanted wanted : downloaded) {
+            if (wanted.kind == ContentKind.MOD && Files.isRegularFile(wanted.destination())) {
+                return true;
+            }
+        }
+        Path mods = modsDir.toAbsolutePath().normalize();
+        for (Path path : plan.toRemove) {
+            if (path.toAbsolutePath().normalize().startsWith(mods) && !Files.exists(path)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**

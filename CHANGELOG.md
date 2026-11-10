@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.1.0
+
+One jar now covers NeoForge, Fabric, Quilt, and Forge 1.19.2 and newer.
+
+**New loaders.**
+
+- **NeoForge** is supported on every version, using the same early hook as Forge, so mods are
+  synced before NeoForge scans for them. Tested on NeoForge 21.1 (Minecraft 1.21.1).
+- **Fabric and Quilt** are supported on every version. Fabric decides which mods to load before
+  any mod code runs, so a boot that changes `mods/` ends with a restart through `restartMode`.
+  A boot with nothing to change carries straight on. To avoid the restart entirely, run the jar
+  from your start script with `java -jar` before the server starts.
+
+**One file instead of one per version.** The universal jar has no Minecraft version built in. It
+detects the game version and loader at launch, from the loader itself where possible, and logs
+what it found. New Minecraft versions therefore need no new build. Only 1.7.10, 1.12.2 and 1.16.5
+keep their own jars, because their loaders expose a different interface.
+
+**Safer syncing.**
+
+- A pack built for another loader is refused, for example a NeoForge pack on a Fabric server.
+  This works the same way as the existing refusal for another Minecraft version. Quilt accepts
+  Fabric packs, and Forge and NeoForge accept each other's packs on 1.20.1.
+- A warning is logged when the pack was exported with a different loader build than the server
+  runs.
+- Stale-copy detection now reads `neoforge.mods.toml`, `fabric.mod.json` and `quilt.mod.json`,
+  not just `mods.toml`.
+- NeoForge's early-loading services are recognised when deciding whether an install needs a
+  restart.
+
+**New settings.**
+
+- `minecraftVersion` in the config, and `--minecraft` / `--loader` on the command line, for the
+  rare launcher that hides the version.
+
+**Upgrading.** If you used a version-specific jar such as `curseforgesync-1.21.11-1.0.2.jar`,
+delete it when you add `curseforgesync-1.1.0.jar`. Two copies in `mods/` conflict with each other.
+
 ## 1.0.2
 
 Scripts and configs from the pack are now reconciled, not just copied. Turn on `syncOverrides` to

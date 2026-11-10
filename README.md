@@ -1,16 +1,17 @@
 # CurseforgeSync
 
-Tired of manually updating mods in your Forge server? Look no further. A solution to sync with a
-modpack in CurseForge is here!
+Tired of manually updating mods on your Forge, NeoForge or Fabric server? Look no further. A
+solution to sync with a modpack in CurseForge is here!
 
 Drop one jar in `mods/`, put a modpack's project ID in a config file, and every boot the server
-brings its own mods folder in line with the latest release of that pack — before Forge has scanned
-for a single mod. Old versions are deleted, new ones are downloaded, and client-only mods like
-Rubidium, Oculus and Mouse Tweaks are left out.
+brings its own mods folder in line with the latest release of that pack. Old versions are deleted,
+new ones are downloaded, and client-only mods like Sodium, Iris and Mouse Tweaks are left out.
 
 ## Quick start
 
-1. Grab the jar for your Minecraft version from [Releases](../../releases) and put it in `mods/`.
+1. Grab `curseforgesync-<version>.jar` from [Releases](../../releases) and put it in `mods/`. The
+   same jar works on Forge, NeoForge, Fabric and Quilt, on any Minecraft version from 1.19.2 up.
+   Only 1.7.10, 1.12.2 and 1.16.5 servers need a version-specific jar.
 2. Start the server once. It writes `config/curseforgesync.json` and stops short of syncing,
    because it does not know which pack you want yet.
 3. Open the pack's CurseForge page and copy the number from the **Project ID** box on the right.
@@ -30,42 +31,58 @@ server](#trying-it-without-a-server).
 
 ## Supported versions
 
-Each build targets one Minecraft version and is compiled against the newest Forge for it.
+| Jar | Loaders | Minecraft | Early-load hook |
+| --- | --- | --- | --- |
+| `curseforgesync-<version>.jar` | Forge | 1.19.2 and newer | `ITransformationService` (ModLauncher 10) |
+| | NeoForge | every version | `ITransformationService` (ModLauncher 11) |
+| | Fabric, Quilt | every version | `preLaunch` entrypoint |
+| `curseforgesync-1.16.5-<version>.jar` | Forge 36 | 1.16.5 | `ITransformationService` (ModLauncher 8) |
+| `curseforgesync-1.12.2-<version>.jar` | Forge 14.23 | 1.12.2 | `IFMLLoadingPlugin` coremod |
+| `curseforgesync-1.7.10-<version>.jar` | Forge 10.13 | 1.7.10 | `IFMLLoadingPlugin` coremod |
 
-| Minecraft | Forge | Early-load hook |
-| --- | --- | --- |
-| 1.7.10 | 10.13.4.1614 | `IFMLLoadingPlugin` coremod |
-| 1.12.2 | 14.23.5.2860 | `IFMLLoadingPlugin` coremod |
-| 1.16.5 | 36.2.42 | `ITransformationService` (ModLauncher 8) |
-| 1.19.2 | 43.5.2 | `ITransformationService` (ModLauncher 10) |
-| 1.20.6 | 50.2.10 | `ITransformationService` |
-| 1.21.11 | 61.2.0 | `ITransformationService` |
-| 26.1.2 | 64.1.0 | `ITransformationService` |
-| 26.2 | 65.1.1 | `ITransformationService` |
+The universal jar never touches a Minecraft class, so it has no Minecraft version of its own. It
+reads the version and loader at launch, from the loader itself where possible, otherwise from the
+`--fml.mcVersion` launch argument or the server's `libraries/` folder. The log says which:
 
-Use the jar matching your server. If the pack turns out to target a different Minecraft version,
-the sync refuses to run rather than filling `mods/` with jars that cannot load.
+```
+Detected Minecraft 1.21.1 on NeoForge 21.1.264 (version from the loader).
+```
+
+That version picks the pack upload to follow. If the pack targets a different Minecraft version
+or a different loader, the sync refuses to run rather than filling `mods/` with jars that cannot
+load. If the pack was exported with a different loader build than yours, you get a warning.
 
 ## How the early load works
 
-A normal Forge mod is far too late to be useful here: by the time `FMLCommonSetupEvent` fires,
-every jar in `mods/` has already been scanned, opened and had its classes loaded, and changing the
-folder does nothing until the next restart.
+A normal mod is far too late to be useful here: by the time any mod's setup code runs, every jar in
+`mods/` has already been scanned, opened and had its classes loaded, and changing the folder does
+nothing until the next restart.
 
-So CurseforgeSync is not registered as a mod at all. It registers as part of the loader:
+So on Forge and NeoForge, CurseforgeSync is not registered as a mod at all. It registers as part of
+the loader:
 
-- **1.16.5 and newer** ship a `META-INF/services/cpw.mods.modlauncher.api.ITransformationService`
-  entry. ModLauncher instantiates transformation services and calls `initialize` on them before
-  Forge's mod scanner exists, and the sync runs from there.
+- **Forge 1.16.5 and newer, and every NeoForge,** read a
+  `META-INF/services/cpw.mods.modlauncher.api.ITransformationService` entry. ModLauncher
+  instantiates transformation services and calls `initialize` on them before the mod scanner
+  exists, and the sync runs from there.
 - **1.7.10 and 1.12.2** use the `FMLCorePlugin` manifest attribute, FML's `IFMLLoadingPlugin`
   coremod mechanism, with a sorting index that puts it first.
 
-One consequence is worth knowing: **CurseforgeSync does not appear in the server's mod list**, and
-that is deliberate. Forge skips mod-scanning any jar that provides a transformation service.
+One consequence is worth knowing: **CurseforgeSync does not appear in the server's mod list on
+Forge or NeoForge**, and that is deliberate. Both skip mod-scanning any jar that provides a
+transformation service.
 
 The other consequence is that a sync cannot install a *second* early-loading mod and have it take
-effect in the same boot, because the loader read the mods folder for coremods before we got a turn.
+effect in the same boot, because the loader read the mods folder for those before we got a turn.
 When that happens the sync notices and restarts the server (see `restartMode`).
+
+**Fabric and Quilt** have no hook that runs before mod discovery. The earliest point is the
+`preLaunch` entrypoint, by which time the mod set is already fixed. The sync still runs there and
+brings `mods/` up to date, but a boot that changed anything ends with a restart so the new mods
+are actually loaded. A boot with nothing to change carries straight on. If you would rather avoid
+that restart, run the [command-line sync](#trying-it-without-a-server) from your start script
+before the server starts. On Windows that also avoids Fabric holding old jars open while the sync
+tries to delete them.
 
 ## Which mods get skipped
 
@@ -173,6 +190,7 @@ required.
 | `releaseChannel` | `"release"` | Lowest upload quality to accept: `release`, `beta` or `alpha`. |
 | `mode` | `"tracked"` | `tracked` or `strict`, as above. |
 | `side` | `"auto"` | `auto`, `server` or `client`. `auto` reads the launch target. |
+| `minecraftVersion` | `""` | Blank detects it. Only set it if the log says the version could not be detected. |
 | `filterClientMods` | `true` | Skip mods that are only useful on the other side. |
 | `syncOverrides` | `false` | Also reconcile the pack's `overrides/` folder — configs, CraftTweaker scripts, KubeJS. See [Scripts and configs](#scripts-and-configs). |
 | `overrideFolders` | `["config", "defaultconfigs", "scripts", "kubejs"]` | Which override subfolders to copy when the above is on. |
@@ -181,7 +199,7 @@ required.
 | `verbose` | `false` | Log every entry considered, not just the ones that changed. |
 | `failOnError` | `false` | Abort start-up if the sync fails. Off so a CurseForge outage cannot keep your server down. |
 | `allowCdnFallback` | `true` | See [Mods that cannot be downloaded](#mods-that-cannot-be-downloaded). |
-| `restartMode` | `"exit"` | `exit`, `relaunch` or `none` when a coremod arrives mid-sync. |
+| `restartMode` | `"exit"` | `exit`, `relaunch` or `none` when a sync needs a restart to take effect. |
 | `restartExitCode` | `0` | Exit code used by `exit`. Set this to whatever your panel treats as "restart me". |
 | `apiKey` | `""` | Your own key from console.curseforge.com. Blank uses the built-in one. `CURSEFORGE_API_KEY` works too. |
 | `connectTimeoutSeconds` | `20` | |
@@ -203,10 +221,11 @@ busy host it is worth getting your own free one from
 
 ## Restarts
 
-Installing an ordinary mod needs no restart — the sync finishes before Forge looks at the folder.
-Installing a *coremod* or another transformation service does, because those are discovered even
-earlier than we run. The sync detects this by inspecting the jar it just wrote and acts on
-`restartMode`:
+On Forge and NeoForge, installing an ordinary mod needs no restart — the sync finishes before the
+loader looks at the folder. Installing a *coremod* or another loader plugin does, because those
+are discovered even earlier than we run. The sync detects this by inspecting the jar it just wrote.
+On Fabric and Quilt, any change to `mods/` needs a restart, as explained above. Either way the sync
+then acts on `restartMode`:
 
 - `exit` (default) stops the JVM with `restartExitCode`, letting your panel or start script bring
   it back. This is the right choice almost everywhere.
@@ -228,18 +247,23 @@ Every jar is also a runnable CLI, which is the easiest way to see what a sync wo
 letting it near a live server:
 
 ```
-java -jar curseforgesync-1.19.2-1.0.0.jar --dir ./myserver --pack 885460 --dry-run
+java -jar curseforgesync-1.1.0.jar --dir ./myserver --pack 885460 --dry-run
 ```
 
 ```
   --dir <path>    Server directory to sync. Defaults to the current directory.
   --pack <id>     CurseForge project ID, overriding the config for this run.
   --side <s>      server or client. Defaults to server.
+  --minecraft <v> Minecraft version, if it cannot be read from <dir>/libraries.
+  --loader <l>    forge, neoforge, fabric or quilt, likewise.
   --dry-run       Report what would change without touching anything.
   --verbose, -v   Log every mod considered.
 ```
 
-It is also handy for pre-seeding a new server before its first boot.
+The CLI reads the Minecraft version and loader from the server's `libraries/` folder, so point
+`--dir` at an installed server, or pass `--minecraft` and `--loader`. It is also handy for
+pre-seeding a new server before its first boot, and for syncing a Fabric server from its start
+script so the server itself never needs to restart.
 
 ## Files it creates
 
@@ -256,21 +280,37 @@ It is also handy for pre-seeding a new server before its first boot.
 Needs a JDK 17 or newer; Gradle provisions the JDK 8 toolchain for the legacy ports itself.
 
 ```
-./gradlew release        # all eight ports into build/libs
-./gradlew :ports:1.19.2:build   # just one
-./gradlew printVersions  # what each port targets
+./gradlew release                 # every jar into build/libs
+./gradlew :ports:universal:build  # just the universal jar, with tests
+./gradlew printVersions           # what each port targets
 ```
 
-No ForgeGradle and no Minecraft decompilation, because none of this code touches a Minecraft class.
-Each port compiles the same shared sources in `common/` against the loader SPI for its era, which
-keeps a full eight-version build to a few seconds.
+No ForgeGradle, Loom or ModDevGradle and no Minecraft decompilation, because none of this code
+touches a Minecraft class. Each port compiles the same shared sources in `common/` against the
+loader SPI for its era, which keeps a full build to a few seconds.
 
 ```
-common/                  version-independent core: API client, sync engine, config, side filter
-platform/modlauncher*/   ITransformationService entry points for 1.16.5+
-platform/fml*/           IFMLLoadingPlugin coremods for 1.7.10 and 1.12.2
-ports/<mcVersion>/       one tiny Gradle project per version, all settings in gradle.properties
+common/                     loader-independent core: API client, sync engine, config, side filter
+platform/modlauncher-common ModLauncher helpers, mods.toml and the service file
+platform/modlauncher/       ITransformationService for ModLauncher 10 and 11 (Forge 1.19.2+, NeoForge)
+platform/modlauncher8/      ITransformationService for ModLauncher 8 (Forge 1.16.5)
+platform/neoforge/          neoforge.mods.toml
+platform/fabric/            preLaunch entrypoint and fabric.mod.json (Fabric, Quilt)
+platform/fml*/              IFMLLoadingPlugin coremods for 1.7.10 and 1.12.2
+ports/universal/            the one modern jar: every platform tree above that applies
+ports/<mcVersion>/          one tiny Gradle project per legacy version
 ```
+
+### Supporting a new Minecraft version
+
+Usually nothing needs building. The universal jar has no Minecraft version of its own, so a new
+release only needs its tag added to the CurseForge upload, which `scripts/upload_curseforge.py`
+does by itself for every Minecraft version from 1.19.2 up.
+
+A new port is only needed when a loader changes the interface the hook implements, as ModLauncher
+did between 8 and 10. In that case add a `platform/<name>/` tree with the new hook and a
+`ports/<name>/gradle.properties` that lists it in `platform=`, and add the port to `settings.gradle`
+and the upload script.
 
 ## License
 

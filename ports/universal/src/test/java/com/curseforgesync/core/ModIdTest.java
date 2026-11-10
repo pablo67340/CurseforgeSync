@@ -91,6 +91,25 @@ class ModIdTest {
         assertEquals(Set.of("buildcraftcore"), Jars.modIds(legacy));
     }
 
+    @Test
+    void readsNeoForgeFabricAndQuiltMetadata(@TempDir Path temp) throws IOException {
+        Path neoForge = temp.resolve("sodium-neoforge-0.6.13+mc1.21.1.jar");
+        writeZip(neoForge, "META-INF/neoforge.mods.toml",
+                "[[mods]]\nmodId = \"sodium\"\n[[dependencies.sodium]]\nmodId = \"neoforge\"\n");
+        Path fabric = temp.resolve("sodium-fabric-0.6.13+mc1.21.1.jar");
+        writeZip(fabric, "fabric.mod.json",
+                "{\"schemaVersion\": 1, \"id\": \"Sodium\", \"depends\": {\"fabricloader\": \"*\"}}");
+        Path quilt = temp.resolve("qsl-core.jar");
+        writeZip(quilt, "quilt.mod.json", "{\"quilt_loader\": {\"id\": \"quilt_base\", \"version\": \"1\"}}");
+        Path broken = temp.resolve("broken.jar");
+        writeZip(broken, "fabric.mod.json", "{ not json");
+
+        assertEquals(Set.of("sodium"), Jars.modIds(neoForge));
+        assertEquals(Set.of("sodium"), Jars.modIds(fabric));
+        assertEquals(Set.of("quilt_base"), Jars.modIds(quilt));
+        assertTrue(Jars.modIds(broken).isEmpty());
+    }
+
     /** An unreadable or non-mod jar must come back empty so it is never called a duplicate. */
     @Test
     void returnsNothingForJarsThatDeclareNoMod(@TempDir Path temp) throws IOException {

@@ -11,9 +11,10 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * The hook that gets CurseforgeSync running before Forge looks for mods (1.19.2 and newer).
+ * The hook that gets CurseforgeSync running before Forge or NeoForge looks for mods (1.19.2 and
+ * newer). ModLauncher 10 and NeoForge's ModLauncher 11 share this interface unchanged.
  *
- * <p>Forge's {@code ModDirTransformerDiscoverer} sweeps the mods folder for jars that declare a
+ * <p>FML's {@code ModDirTransformerDiscoverer} sweeps the mods folder for jars that declare a
  * {@code cpw.mods.modlauncher.api.ITransformationService}, and ModLauncher loads what it finds
  * into the service layer. Every service is then taken through {@code onLoad} and
  * {@code initialize} before any of them is asked to {@code beginScanning} -- and FML's own mod
@@ -45,7 +46,8 @@ public final class CurseforgeSyncService implements ITransformationService {
         CurseforgeSync.bootstrap(
                 ModLauncherSupport.gameDir(environment),
                 ModLauncherSupport.side(environment),
-                "ModLauncher");
+                "ModLauncher",
+                ModLauncherSupport.hints());
     }
 
     @Override

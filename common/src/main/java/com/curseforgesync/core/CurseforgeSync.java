@@ -8,26 +8,39 @@ import java.security.CodeSource;
 import java.util.Locale;
 
 /**
- * The single entry point every version-specific hook calls into.
+ * The single entry point every loader-specific hook calls into.
  *
- * <p>Each supported Minecraft version reaches this from a different place -- a ModLauncher
- * transformation service on 1.16.5 and newer, an FML coremod on 1.7.10 and 1.12.2 -- but they all
- * arrive here with the same two facts: where the game directory is and which side is booting.
- * Everything past this point is plain Java with no game classes involved.
+ * <p>Each loader reaches this from a different place -- a ModLauncher transformation service on
+ * Forge and NeoForge, a preLaunch entrypoint on Fabric and Quilt, an FML coremod on 1.7.10 and
+ * 1.12.2 -- but they all arrive here with the same facts: where the game directory is, which side
+ * is booting, and whatever the loader could say about itself. Everything past this point is plain
+ * Java with no game classes involved.
  */
 public final class CurseforgeSync {
-    private static boolean alreadyRan;
+    /**
+     * Set once a sync has started in this JVM. A system property rather than a static field
+     * because the same jar can be loaded twice by different class loaders, for example once as a
+     * ModLauncher service and once more by Sinytra Connector reading its fabric.mod.json.
+     */
+    private static final String RAN_PROPERTY = "curseforgesync.bootstrapped";
 
     private CurseforgeSync() {
     }
 
-    public static synchronized void bootstrap(Path gameDir, Side detectedSide, String platform) {
-        if (alreadyRan) {
+    /** For the pre-1.17 hooks, which only ever run on Forge and have their version baked in. */
+    public static void bootstrap(Path gameDir, Side detectedSide, String platform) {
+        GameInfo.Hints hints = new GameInfo.Hints();
+        hints.loader = GameInfo.Loader.FORGE;
+        bootstrap(gameDir, detectedSide, platform, hints);
+    }
+
+    public static synchronized void bootstrap(Path gameDir, Side detectedSide, String platform, GameInfo.Hints hints) {
+        if (System.getProperty(RAN_PROPERTY) != null) {
             // Some loaders construct a service more than once; syncing twice would be wasteful
             // at best and would fight with itself at worst.
             return;
         }
-        alreadyRan = true;
+        System.setProperty(RAN_PROPERTY, platform);
 
         CfsLog.openLogFile(gameDir);
         BuildInfo build = BuildInfo.load();
@@ -56,15 +69,21 @@ public final class CurseforgeSync {
         }
 
         Side side = config.sideAuto ? detectedSide : config.side;
+        GameInfo game = GameInfo.detect(gameDir, hints, config.minecraftVersion, build.minecraftVersion);
         CfsLog.info("Running as " + side.name().toLowerCase(Locale.ROOT) + " in " + gameDir.toAbsolutePath()
                 + " (mode: " + config.mode.name().toLowerCase(Locale.ROOT) + ").");
+        CfsLog.info("Detected " + game.describe() + " (version from " + game.minecraftVersionSource + ").");
 
         long startedAt = System.currentTimeMillis();
         SyncEngine.Result result = null;
         try {
-            result = new SyncEngine(gameDir, config, build, side, selfJarName()).run();
+            result = new SyncEngine(gameDir, config, game, side, selfJarName()).run();
         } catch (Exception e) {
-            CfsLog.error("Sync failed", e);
+            if (e instanceof SyncEngine.PackMismatchException) {
+                CfsLog.error("Sync refused: " + e.getMessage());
+            } else {
+                CfsLog.error("Sync failed", e);
+            }
             if (config.failOnError) {
                 CfsLog.error("failOnError is on, so start-up is being aborted.");
                 CfsLog.close();
@@ -92,7 +111,7 @@ public final class CurseforgeSync {
 
     private static void report(SyncEngine.Result result, long elapsedMillis) {
         if (!result.changedAnything()) {
-            CfsLog.info("Already in sync (" + elapsedMillis + "ms). Handing off to Forge.");
+            CfsLog.info("Already in sync (" + elapsedMillis + "ms). Handing off to the loader.");
         } else {
             CfsLog.info("Synced in " + elapsedMillis + "ms: " + result.installed.size() + " installed, "
                     + result.removed.size() + " removed.");

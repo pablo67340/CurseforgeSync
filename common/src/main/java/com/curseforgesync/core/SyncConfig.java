@@ -73,6 +73,8 @@ public final class SyncConfig {
     public Mode mode = Mode.TRACKED;
     public Side side = Side.SERVER;
     public boolean sideAuto = true;
+    /** Blank means "detect it", which is right everywhere except unusual launch wrappers. */
+    public String minecraftVersion = "";
     public boolean filterClientMods = true;
     public boolean syncOverrides;
     public List<String> overrideFolders = new ArrayList<String>(Arrays.asList("config", "defaultconfigs", "scripts", "kubejs"));
@@ -143,6 +145,7 @@ public final class SyncConfig {
         String rawSide = Json.str(json, "side", "auto");
         sideAuto = rawSide == null || rawSide.trim().isEmpty() || rawSide.trim().equalsIgnoreCase("auto");
         side = Side.parse(rawSide, Side.SERVER);
+        minecraftVersion = Json.str(json, "minecraftVersion", minecraftVersion);
 
         filterClientMods = Json.bool(json, "filterClientMods", filterClientMods);
         syncOverrides = Json.bool(json, "syncOverrides", syncOverrides);
@@ -201,7 +204,7 @@ public final class SyncConfig {
                 + "  // CurseforgeSync\n"
                 + "  //\n"
                 + "  // Point this at a CurseForge modpack and the mods folder is brought in line with\n"
-                + "  // it every time the server boots, before Forge scans for mods.\n"
+                + "  // it every time the server boots, before the loader scans for mods.\n"
                 + "  //\n"
                 + "  // The only setting you have to fill in is modpackProjectId. Find it in the\n"
                 + "  // \"Project ID\" box on the right-hand side of the pack's CurseForge page.\n"
@@ -226,6 +229,11 @@ public final class SyncConfig {
                 + "\n"
                 + "  // auto, server or client. auto detects the running side from the launch target.\n"
                 + "  \"side\": \"auto\",\n"
+                + "\n"
+                + "  // The Minecraft version this server runs, used to pick the matching pack upload.\n"
+                + "  // Blank detects it from the loader, which works on every normal install. Only\n"
+                + "  // set it if the log says the version could not be detected.\n"
+                + "  \"minecraftVersion\": \"\",\n"
                 + "\n"
                 + "  // Skip mods that are only useful on the other side (Rubidium, Oculus, Mouse\n"
                 + "  // Tweaks and friends on a server). Every decision is written to the log, and\n"
@@ -263,7 +271,9 @@ public final class SyncConfig {
                 + "  \"allowCdnFallback\": true,\n"
                 + "\n"
                 + "  // Installing a coremod or loader plugin needs a restart, because those are read\n"
-                + "  // before CurseforgeSync gets a turn. exit = stop and let your panel restart us,\n"
+                + "  // before CurseforgeSync gets a turn. On Fabric every change to mods/ needs one,\n"
+                + "  // because Fabric picks its mods before any mod code runs.\n"
+                + "  // exit = stop and let your panel restart us,\n"
                 + "  // relaunch = start a fresh JVM ourselves, none = carry on and pick it up later.\n"
                 + "  \"restartMode\": \"exit\",\n"
                 + "  \"restartExitCode\": 0,\n"

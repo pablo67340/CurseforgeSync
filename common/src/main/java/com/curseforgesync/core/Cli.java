@@ -4,7 +4,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
- * Runs a sync from the command line: {@code java -jar curseforgesync-<mc>-<version>.jar}.
+ * Runs a sync from the command line: {@code java -jar curseforgesync-<version>.jar}.
  *
  * <p>Handy for seeding a brand new server before its first boot, for checking what a pack update
  * would do with {@code --dry-run}, and for warming the download cache somewhere with a fast
@@ -20,6 +20,7 @@ public final class Cli {
         Boolean dryRun = null;
         boolean verbose = false;
         Integer projectId = null;
+        GameInfo.Hints hints = new GameInfo.Hints();
 
         for (int i = 0; i < args.length; i++) {
             String argument = args[i];
@@ -32,6 +33,10 @@ public final class Cli {
                 side = Side.parse(args[++i], Side.SERVER);
             } else if (argument.equals("--pack") && i + 1 < args.length) {
                 projectId = Integer.valueOf(args[++i]);
+            } else if (argument.equals("--minecraft") && i + 1 < args.length) {
+                hints.minecraftVersion = args[++i];
+            } else if (argument.equals("--loader") && i + 1 < args.length) {
+                hints.loader = GameInfo.Loader.parse(args[++i]);
             } else if (argument.equals("--dry-run")) {
                 dryRun = Boolean.TRUE;
             } else if (argument.equals("--verbose") || argument.equals("-v")) {
@@ -77,8 +82,10 @@ public final class Cli {
         }
 
         Side effectiveSide = side != null ? side : (config.sideAuto ? Side.SERVER : config.side);
+        GameInfo game = GameInfo.detect(gameDir, hints, config.minecraftVersion, build.minecraftVersion);
+        CfsLog.info("Target: " + game.describe() + " (version from " + game.minecraftVersionSource + ").");
         try {
-            SyncEngine.Result result = new SyncEngine(gameDir, config, build, effectiveSide, null).run();
+            SyncEngine.Result result = new SyncEngine(gameDir, config, game, effectiveSide, null).run();
             CfsLog.info("Done: " + result.installed.size() + " installed, " + result.removed.size()
                     + " removed, " + result.skippedForSide.size() + " skipped as wrong-side, "
                     + result.failures.size() + " failed.");
@@ -94,11 +101,13 @@ public final class Cli {
     private static void usage() {
         System.out.println("CurseforgeSync -- sync a mods folder against a CurseForge modpack");
         System.out.println();
-        System.out.println("  java -jar curseforgesync-<mc>-<version>.jar [options]");
+        System.out.println("  java -jar curseforgesync-<version>.jar [options]");
         System.out.println();
         System.out.println("  --dir <path>    Server directory to sync. Defaults to the current directory.");
         System.out.println("  --pack <id>     CurseForge project ID, overriding the config for this run.");
         System.out.println("  --side <s>      server or client. Defaults to server.");
+        System.out.println("  --minecraft <v> Minecraft version, if it cannot be read from <dir>/libraries.");
+        System.out.println("  --loader <l>    forge, neoforge, fabric or quilt, likewise.");
         System.out.println("  --dry-run       Report what would change without touching anything.");
         System.out.println("  --verbose, -v   Log every mod considered.");
         System.out.println("  --help, -h      Show this.");

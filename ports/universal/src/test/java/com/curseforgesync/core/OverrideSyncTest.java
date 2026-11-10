@@ -151,7 +151,7 @@ class OverrideSyncTest {
     }
 
     private static SyncEngine engine(Path gameDir, SyncConfig config) {
-        return new SyncEngine(gameDir, config, BuildInfo.load(), Side.SERVER, null);
+        return new SyncEngine(gameDir, config, GameInfo.of("", GameInfo.Loader.UNKNOWN), Side.SERVER, null);
     }
 
     private static SyncConfig config(SyncConfig.Mode mode) {

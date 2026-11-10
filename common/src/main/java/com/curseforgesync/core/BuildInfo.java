@@ -7,10 +7,9 @@ import java.util.Properties;
 /**
  * What this particular build targets.
  *
- * <p>CurseforgeSync runs before Forge has worked out anything about the game, so it cannot ask the
- * runtime which Minecraft version it is attached to. Instead each port bakes its own numbers into
- * {@code curseforgesync-build.properties} at build time, which is also what lets the engine pick
- * the right pack upload and refuse a pack built for a different version.
+ * <p>The pre-1.17 ports bake their Minecraft version into {@code curseforgesync-build.properties},
+ * because LaunchWrapper and ModLauncher 8 give an early hook no reliable way to ask. The universal
+ * jar leaves it blank and works the version out at launch instead; see {@link GameInfo}.
  */
 public final class BuildInfo {
     public final String minecraftVersion;
@@ -55,6 +54,9 @@ public final class BuildInfo {
 
     @Override
     public String toString() {
+        if (minecraftVersion.isEmpty()) {
+            return modVersion + " (universal)";
+        }
         return modVersion + " for Minecraft " + minecraftVersion + " (Forge " + forgeVersion + ")";
     }
 }

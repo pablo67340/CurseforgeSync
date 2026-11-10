@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "version": "${mod_version}",
+  "name": "${mod_name}",
+  "description": "${mod_description}",
+  "authors": ["${mod_authors}"],
+  "contact": {
+    "sources": "https://github.com/pablo67340/CurseforgeSync",
+    "issues": "https://github.com/pablo67340/CurseforgeSync/issues"
+  },
+  "license": "${mod_license}",
+  "environment": "*",
+  "entrypoints": {
+    "preLaunch": ["com.curseforgesync.launch.CurseforgeSyncPreLaunch"]
+  },
+  "depends": {
+    "fabricloader": ">=0.14.0"
+  }
+}

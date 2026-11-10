@@ -14,18 +14,15 @@ plugins {
 
 rootProject.name = 'curseforgesync'
 
-// Every supported Minecraft version is a sibling project under ports/.
+// Every shipped jar is a sibling project under ports/: one universal jar for every modern
+// loader, plus one per legacy Minecraft version whose loader API differs.
 // The root project itself only aggregates; it produces no jar.
 [
+    'universal',
     '1.7.10',
     '1.12.2',
     '1.16.5',
-    '1.19.2',
-    '1.20.6',
-    '1.21.11',
-    '26.1.2',
-    '26.2',
-].each { mcVersion ->
-    include ":ports:${mcVersion}"
-    project(":ports:${mcVersion}").projectDir = file("ports/${mcVersion}")
+].each { port ->
+    include ":ports:${port}"
+    project(":ports:${port}").projectDir = file("ports/${port}")
 }
