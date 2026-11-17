@@ -37,8 +37,9 @@ public final class CurseforgeSyncService implements ITransformationService {
 
     @Override
     public void onLoad(IEnvironment environment, Set<String> otherServices) {
-        // Nothing to check here. The game directory is not populated in the environment yet,
-        // so the real work waits for initialize().
+        // The game directory is not populated in the environment yet, so the real work waits for
+        // initialize(), either ours or that of a service that has to see the synced folder.
+        ModLauncherSupport.offerSync(environment, () -> initialize(environment));
     }
 
     @Override

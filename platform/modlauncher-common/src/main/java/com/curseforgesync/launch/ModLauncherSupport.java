@@ -17,7 +17,24 @@ import java.util.Optional;
  * not changed between ModLauncher 8 and 10, only {@code ITransformationService} has.
  */
 final class ModLauncherSupport {
+    /**
+     * The environment key under which the sync is offered to other services. ModLauncher visits
+     * services in no fixed order, so a service that reads the mods folder in its own
+     * {@code initialize} (Linkwright does) runs this first; whichever side gets there first does
+     * the sync and the other call returns at once.
+     */
+    static final String SYNC_HOOK = "curseforgesync.sync";
+
     private ModLauncherSupport() {
+    }
+
+    /** Called from {@code onLoad}, which every service gets before any {@code initialize}. */
+    static void offerSync(IEnvironment environment, Runnable sync) {
+        try {
+            environment.computePropertyIfAbsent(IEnvironment.buildKey(SYNC_HOOK, Runnable.class).get(), key -> sync);
+        } catch (Throwable t) {
+            CfsLog.debug("Could not offer the sync to other services: " + t);
+        }
     }
 
     /**

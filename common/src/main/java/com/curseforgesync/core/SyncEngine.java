@@ -127,6 +127,12 @@ public final class SyncEngine {
             if (candidate.serverPack || candidate.releaseType > config.releaseChannel) {
                 continue;
             }
+            if (!candidate.listsManifest) {
+                CfsLog.debug("Passing over " + candidate.displayName + " (file " + candidate.id
+                        + "): it has no manifest.json, so it is not an exported pack. Server packs "
+                        + "belong in the upload's server pack slot.");
+                continue;
+            }
             if (best == null || candidate.id > best.id) {
                 best = candidate;
             }

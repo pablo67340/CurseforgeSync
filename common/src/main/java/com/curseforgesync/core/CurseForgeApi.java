@@ -83,6 +83,12 @@ public final class CurseForgeApi {
         public final boolean serverPack;
         public final int serverPackFileId;
         public final String fileDate;
+        /**
+         * CurseForge lists the top-level entries of every upload. An exported modpack always has
+         * a manifest.json there; a server pack uploaded as an ordinary file does not. True when
+         * the API gave no listing, so an unknown upload is not skipped on that alone.
+         */
+        public final boolean listsManifest;
 
         File(Map<String, Object> json) {
             this.id = Json.intVal(json, "id", 0);
@@ -98,6 +104,15 @@ public final class CurseForgeApi {
             this.serverPack = Json.bool(json, "isServerPack", false);
             this.serverPackFileId = Json.intVal(json, "serverPackFileId", 0);
             this.fileDate = Json.str(json, "fileDate", "");
+
+            List<Object> modules = Json.arr(json, "modules");
+            boolean manifest = modules.isEmpty();
+            for (Object element : modules) {
+                if ("manifest.json".equalsIgnoreCase(Json.str(Json.asObject(element), "name", ""))) {
+                    manifest = true;
+                }
+            }
+            this.listsManifest = manifest;
 
             String hash = null;
             for (Object element : Json.arr(json, "hashes")) {

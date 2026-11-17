@@ -76,6 +76,13 @@ The other consequence is that a sync cannot install a *second* early-loading mod
 effect in the same boot, because the loader read the mods folder for those before we got a turn.
 When that happens the sync notices and restarts the server (see `restartMode`).
 
+Early-loading mods that read the mods folder themselves can ask for the sync to happen first.
+ModLauncher starts its services in no fixed order, so CurseforgeSync offers the sync in the launch
+environment under the key `curseforgesync.sync` (a `Runnable`). A service that calls it from its
+own `initialize` sees the synced folder whichever of the two ModLauncher starts first; the sync
+still only runs once. [Linkwright](https://www.curseforge.com/minecraft/mc-mods/linkwright) does
+this, so its checks always cover the mods CurseforgeSync just installed.
+
 **Fabric and Quilt** have no hook that runs before mod discovery. The earliest point is the
 `preLaunch` entrypoint, by which time the mod set is already fixed. The sync still runs there and
 brings `mods/` up to date, but a boot that changed anything ends with a restart so the new mods
@@ -186,7 +193,7 @@ required.
 | --- | --- | --- |
 | `enabled` | `true` | Master switch. |
 | `modpackProjectId` | `0` | The pack to follow. `0` disables the sync. |
-| `modpackFileId` | `0` | Pin one specific upload. `0` follows the newest matching release. |
+| `modpackFileId` | `0` | Pin one specific upload. `0` follows the newest matching release, never a server pack: uploads CurseForge marks as a server pack, and any upload without a `manifest.json`, are passed over. |
 | `releaseChannel` | `"release"` | Lowest upload quality to accept: `release`, `beta` or `alpha`. |
 | `mode` | `"tracked"` | `tracked` or `strict`, as above. |
 | `side` | `"auto"` | `auto`, `server` or `client`. `auto` reads the launch target. |
