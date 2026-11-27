@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.2.0
+
+**Server packs are never mistaken for the pack itself.** A pack's files are checked for a
+`manifest.json` before one is followed. An exported modpack always has one at the top level; a
+server zip does not. Previously only uploads CurseForge had marked as server packs were passed
+over, so an author who uploaded their server files as an ordinary release could have a server
+sync itself against the wrong zip. An upload CurseForge gives no file listing for is still
+considered, so an unknown upload is not skipped on that alone.
+
+**The sync is offered to other early services.** Forge and NeoForge start their ModLauncher
+services in no fixed order, so a service that reads `mods/` could run before CurseforgeSync had
+written to it. The sync is now published in the launch environment as `curseforgesync.sync`, a
+`Runnable` any service can call to have the folder brought up to date first. Calling it more
+than once is safe; the sync still happens once.
+[Linkwright](https://www.curseforge.com/minecraft/mc-mods/linkwright) uses this, so its checks
+always cover the mods CurseforgeSync just installed.
+
+**Note for anyone updating from CurseForge.** This is the first release here to include the
+universal jar, which is the one that supports NeoForge, Fabric and Quilt as well as Forge 1.19.2
+and newer. If you have a per-version jar such as `curseforgesync-1.21.11-1.0.2.jar` in `mods/`,
+delete it when you add `curseforgesync-1.2.0.jar`. Two copies conflict with each other.
+
 ## 1.1.0
 
 One jar now covers NeoForge, Fabric, Quilt, and Forge 1.19.2 and newer.
